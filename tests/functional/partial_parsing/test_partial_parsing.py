@@ -9,7 +9,7 @@ import yaml
 import dbt.flags as flags
 from dbt.contracts.files import ParseFileType
 from dbt.contracts.results import TestStatus
-from dbt.exceptions import CompilationError
+from dbt.exceptions import CompilationError, DbtReferenceError
 from dbt.plugins.manifest import ModelNodeArgs, PluginNodes
 from dbt.tests.fixtures.project import write_project_files
 from dbt.tests.util import (
@@ -72,6 +72,8 @@ from tests.functional.partial_parsing.fixtures import (
     schema_sources3_yml,
     schema_sources4_yml,
     schema_sources5_yml,
+    schema_sources_add_access_yml,
+    schema_sources_add_group_yml,
     snapshot2_sql,
     snapshot_sql,
     sources_tests1_sql,
@@ -427,6 +429,18 @@ class TestSources:
         # Change source test
         write_file(sources_tests2_sql, project.project_root, "macros", "tests.sql")
         results = run_dbt(["--partial-parse", "run"])
+
+        # Add group and add source to group
+        write_file(schema_sources_add_group_yml, project.project_root, "models", "sources.yml")
+        results = run_dbt(["--partial-parse", "run"])
+        manifest = get_manifest(project.project_root)
+        assert len(manifest.sources) == 1
+        assert manifest.sources["source.test.seed_sources.raw_customers"].group == "dave_land"
+
+        # Add group and add source to group
+        write_file(schema_sources_add_access_yml, project.project_root, "models", "sources.yml")
+        with pytest.raises(DbtReferenceError):
+            run_dbt(["--partial-parse", "run"])
 
 
 class TestPartialParsingDependency:

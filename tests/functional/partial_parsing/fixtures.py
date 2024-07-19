@@ -164,6 +164,62 @@ seeds:
 
 """
 
+
+schema_sources_add_group_yml = """
+
+groups:
+  - name: dave_land
+    owner:
+      name: dave
+
+
+sources:
+  - name: seed_sources
+    schema: "{{ target.schema }}"
+    group: dave_land
+    tables:
+      - name: raw_customers
+        columns:
+          - name: id
+            data_tests:
+              - not_null:
+                  severity: "{{ 'error' if target.name == 'prod' else 'warn' }}"
+              - unique
+              - every_value_is_blue
+          - name: first_name
+          - name: last_name
+          - name: email
+"""
+
+
+schema_sources_add_access_yml = """
+
+groups:
+  - name: dave_land
+    owner:
+      name: dave
+
+
+sources:
+  - name: seed_sources
+    schema: "{{ target.schema }}"
+    group: dave_land
+    access: private
+    tables:
+      - name: raw_customers
+        columns:
+          - name: id
+            data_tests:
+              - not_null:
+                  severity: "{{ 'error' if target.name == 'prod' else 'warn' }}"
+              - unique
+              - every_value_is_blue
+          - name: first_name
+          - name: last_name
+          - name: email
+
+"""
+
 env_var_schema_yml = """
 
 models:
