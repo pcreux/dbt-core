@@ -1232,6 +1232,9 @@ class SourceDefinition(
             old.unrendered_config,
         )
 
+    def same_source_representation(self, old: "SourceDefinition") -> bool:
+        return self.access == old.access and self.group == old.group
+
     def same_contents(self, old: Optional["SourceDefinition"]) -> bool:
         # existing when it didn't before is a change!
         if old is None:
@@ -1252,6 +1255,7 @@ class SourceDefinition(
             and self.same_quoting(old)
             and self.same_freshness(old)
             and self.same_external(old)
+            and self.same_source_representation(old)
             and True
         )
 
@@ -1338,6 +1342,9 @@ class Exposure(GraphNode, ExposureResource):
     def same_url(self, old: "Exposure") -> bool:
         return self.url == old.url
 
+    def same_group(self, old: "Exposure") -> bool:
+        return self.group == old.group
+
     def same_config(self, old: "Exposure") -> bool:
         return self.config.same_contents(
             self.unrendered_config,
@@ -1360,6 +1367,7 @@ class Exposure(GraphNode, ExposureResource):
             and self.same_label(old)
             and self.same_depends_on(old)
             and self.same_config(old)
+            and self.same_group(old)
             and True
         )
 
