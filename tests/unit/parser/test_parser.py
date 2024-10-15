@@ -279,6 +279,7 @@ models:
             - not_null:
                 severity: WARN
             - accepted_values:
+                description: Only primary colors are allowed in here
                 values: ['red', 'blue', 'green']
             - foreign_package.test_case:
                 arg: 100
@@ -463,7 +464,6 @@ class SchemaParserSourceTest(SchemaParserTest):
     @mock.patch("dbt.parser.sources.get_adapter")
     def test__parse_basic_source_meta(self, mock_get_adapter):
         block = self.file_block_for(MULTIPLE_TABLE_SOURCE_META, "test_one.yml")
-        self.parser.manifest.files[block.file.file_id] = block.file
         dct = yaml_from_file(block.file)
         self.parser.parse_file(block, dct)
         self.assert_has_manifest_lengths(self.parser.manifest, sources=2)
@@ -632,6 +632,7 @@ class SchemaParserModelsTest(SchemaParserTest):
         self.assertEqual(tests[0].tags, [])
         self.assertEqual(tests[0].refs, [RefArgs(name="my_model")])
         self.assertEqual(tests[0].column_name, "color")
+        self.assertEqual(tests[0].description, "Only primary colors are allowed in here")
         self.assertEqual(tests[0].package_name, "snowplow")
         self.assertTrue(tests[0].name.startswith("accepted_values_"))
         self.assertEqual(tests[0].fqn, ["snowplow", tests[0].name])
@@ -655,7 +656,7 @@ class SchemaParserModelsTest(SchemaParserTest):
         self.assertEqual(tests[1].tags, [])
         self.assertEqual(tests[1].refs, [RefArgs(name="my_model")])
         self.assertEqual(tests[1].column_name, "color")
-        self.assertEqual(tests[1].column_name, "color")
+        self.assertEqual(tests[1].description, "")
         self.assertEqual(tests[1].fqn, ["snowplow", tests[1].name])
         self.assertTrue(tests[1].name.startswith("foreign_package_test_case_"))
         self.assertEqual(tests[1].package_name, "snowplow")
