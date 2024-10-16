@@ -55,7 +55,7 @@ There are some tools that will be helpful to you in developing locally. While th
 
 These are the tools used in `dbt-core` development and testing:
 
-- [`tox`](https://tox.readthedocs.io/en/latest/) to manage virtualenvs across python versions. We currently target the latest patch releases for Python 3.8, 3.9, 3.10 and 3.11
+- [`tox`](https://tox.readthedocs.io/en/latest/) to manage virtualenvs across python versions. We currently target the latest patch releases for Python 3.9, 3.10 and 3.11
 - [`pytest`](https://docs.pytest.org/en/latest/) to define, discover, and run tests
 - [`flake8`](https://flake8.pycqa.org/en/latest/) for code linting
 - [`black`](https://github.com/psf/black) for code formatting
