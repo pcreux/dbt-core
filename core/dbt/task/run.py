@@ -568,6 +568,9 @@ class ModelRunner(CompileRunner):
                 # At least one batch has been inserted successfully!
                 incremental_batch = True
 
+            except (KeyboardInterrupt, SystemExit):
+                # reraise it for GraphRunnableTask.execute_nodes to handle
+                raise
             except Exception as e:
                 exception = e
                 batch_run_result = self._build_failed_run_batch_result(
