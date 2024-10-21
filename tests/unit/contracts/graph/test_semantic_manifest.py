@@ -1,14 +1,10 @@
-from argparse import Namespace
 from unittest.mock import patch
 
 import pytest
 
-from core.dbt.artifacts.resources.v1.model import TimeSpine
 from core.dbt.contracts.graph.manifest import Manifest
 from core.dbt.contracts.graph.nodes import ModelNode
-from core.dbt.flags import set_from_args
 from dbt.contracts.graph.semantic_manifest import SemanticManifest
-from tests.unit.utils.manifest import metricflow_time_spine_model
 
 
 # Overwrite the default nods to construct the manifest
