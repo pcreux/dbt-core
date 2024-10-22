@@ -62,6 +62,7 @@ class SemanticManifest:
         validation_results = validator.validate_semantic_manifest(semantic_manifest)
         new_time_spines = semantic_manifest.project_configuration.time_spines
         old_time_spines = semantic_manifest.project_configuration.time_spine_table_configurations
+        # If the new time spine contains a day grain then it is functionally equivalent to the legacy time spine.
         new_time_spines_contain_day = any(
             c for c in new_time_spines if c.primary_column.time_granularity == TimeGranularity.DAY
         )
