@@ -130,7 +130,11 @@ def _get_plugin_msg_info(
 
     needs_update = False
 
-    if plugin.major != core.major or plugin.minor != core.minor:
+    assert plugin.major is not None
+    assert plugin.minor is not None
+    assert core.major is not None
+    assert core.minor is not None
+    if plugin.major != core.major or plugin.minor < core.minor:
         compatibility_msg = red("Not compatible!")
         needs_update = True
         return (compatibility_msg, needs_update)
