@@ -520,6 +520,37 @@ class TestGetVersionInformation:
 
         assert expected == actual
 
+    def test_plugin_diff_plugin_patch_ahead_latest(self, mocker):
+        """
+        Now that adapters are decoupled from core, a higher minor version of a plugin
+        is compatible with a lower minor version of core.
+        """
+
+        mock_versions(
+            mocker,
+            installed="1.8.0",
+            latest="1.8.0",
+            plugins={
+                "foobar": ("1.8.4", "1.8.4"),
+            },
+        )
+
+        actual = dbt.version.get_version_information()
+        expected = "\n".join(
+            [
+                "Core:",
+                "  - installed: 1.8.0",
+                f"  - latest:    1.8.0 - {green('Up to date!')}",
+                "",
+                "Plugins:",
+                f"  - foobar: 1.8.4 - {green('Up to date!')}",
+                "",
+                "",
+            ]
+        )
+
+        assert expected == actual
+
     def test_plugin_diff_plugin_minor_ahead_no_latest(self, mocker):
         """
         Now that adapters are decoupled from core, a higher minor version of a plugin
