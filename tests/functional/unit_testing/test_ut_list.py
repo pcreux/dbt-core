@@ -22,7 +22,7 @@ class TestUnitTestList:
             "my_model_a.sql": my_model_a_sql,
             "my_model_b.sql": my_model_b_sql,
             "test_my_model.yml": test_my_model_yml + datetime_test,
-            "test_disabled_my_model.yml": test_disabled_my_model_yml
+            "test_disabled_my_model.yml": test_disabled_my_model_yml,
         }
 
     @pytest.fixture(scope="class")
