@@ -93,11 +93,16 @@ def get_execution_status(sql: str, adapter: BaseAdapter) -> Tuple[RunStatus, str
         response, _ = adapter.execute(sql, auto_begin=False, fetch=False)
         status = RunStatus.Success
         message = response._message
+    except (KeyboardInterrupt, SystemExit):
+        raise
     except DbtRuntimeError as exc:
         status = RunStatus.Error
         message = exc.msg
-    finally:
-        return status, message
+    except Exception as exc:
+        status = RunStatus.Error
+        message = str(exc)
+
+    return (status, message)
 
 
 def track_model_run(index, num_nodes, run_model_result):
