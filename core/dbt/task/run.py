@@ -658,7 +658,6 @@ class RunTask(CompileTask):
             return RunStatus.Success
 
         status = RunStatus.Success
-        failed = False
         num_hooks = len(ordered_hooks)
 
         for idx, hook in enumerate(ordered_hooks, 1):
@@ -669,7 +668,7 @@ class RunTask(CompileTask):
                 timing: List[TimingInfo] = []
                 failures = 1
 
-                if not failed:
+                if status == RunStatus.Success:
                     with collect_timing_info("compile", timing.append):
                         sql = self.get_hook_sql(
                             adapter, hook, hook.index, num_hooks, extra_context
@@ -701,7 +700,6 @@ class RunTask(CompileTask):
                         message = f"{hook_name} passed"
                     else:
                         message = f"{hook_name} failed, error:\n {message}"
-                        failed = True
                 else:
                     status = RunStatus.Skipped
                     message = f"{hook_name} skipped"
