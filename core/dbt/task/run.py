@@ -666,7 +666,6 @@ class RunTask(CompileTask):
                 hook_name = f"{hook.package_name}.{hook_type}.{hook.index - 1}"
                 execution_time = 0.0
                 timing: List[TimingInfo] = []
-                failures = 1
 
                 if status == RunStatus.Success:
                     with collect_timing_info("compile", timing.append):
@@ -694,7 +693,6 @@ class RunTask(CompileTask):
                     finished_at = timing[1].completed_at or datetime.utcnow()
                     hook.update_event_status(finished_at=finished_at.isoformat())
                     execution_time = (finished_at - started_at).total_seconds()
-                    failures = 0 if status == RunStatus.Success else 1
 
                     if status == RunStatus.Success:
                         message = f"{hook_name} passed"
@@ -714,7 +712,7 @@ class RunTask(CompileTask):
                         message=message,
                         adapter_response={},
                         execution_time=execution_time,
-                        failures=failures,
+                        failures=0 if status == RunStatus.Success else 1,
                         node=hook,
                     )
                 )
