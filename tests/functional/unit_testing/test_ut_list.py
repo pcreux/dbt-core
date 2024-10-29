@@ -59,7 +59,7 @@ class TestUnitTestList:
             "original_file_path": os.path.join("models", "test_my_model.yml"),
             "unique_id": "unit_test.test.my_model.test_my_model",
             "depends_on": {"macros": [], "nodes": ["model.test.my_model"]},
-            "config": {"tags": [], "meta": {}},
+            "config": {"tags": [], "meta": {}, "enabled": True},
         }
         for result in results:
             json_result = json.loads(result)
