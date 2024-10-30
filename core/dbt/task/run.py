@@ -194,21 +194,7 @@ class ModelRunner(CompileRunner):
 
     def describe_node(self) -> str:
         # TODO CL 'language' will be moved to node level when we change representation
-        materialization_strategy = self.node.config.get("incremental_strategy")
-        materialization = (
-            "microbatch"
-            if materialization_strategy == "microbatch"
-            else self.node.get_materialization()
-        )
-        return f"{self.node.language} {materialization} model {self.get_node_representation()}"
-
-    def describe_batch(self, batch_start: Optional[datetime]) -> str:
-        # Only visualize date if batch_start year/month/day
-        formatted_batch_start = MicrobatchBuilder.format_batch_start(
-            batch_start, self.node.config.batch_size
-        )
-
-        return f"batch {formatted_batch_start} of {self.get_node_representation()}"
+        return f"{self.node.language} {self.node.get_materialization()} model {self.get_node_representation()}"
 
     def print_start_line(self):
         fire_event(
@@ -240,53 +226,6 @@ class ModelRunner(CompileRunner):
                 group=group,
             ),
             level=level,
-        )
-
-    def print_batch_result_line(
-        self,
-        result: RunResult,
-        batch_start: Optional[datetime],
-        batch_idx: int,
-        batch_total: int,
-        exception: Optional[Exception],
-    ):
-        description = self.describe_batch(batch_start)
-        group = group_lookup.get(self.node.unique_id)
-        if result.status == NodeStatus.Error:
-            status = result.status
-            level = EventLevel.ERROR
-        else:
-            status = result.message
-            level = EventLevel.INFO
-        fire_event(
-            LogModelResult(
-                description=description,
-                status=status,
-                index=batch_idx,
-                total=batch_total,
-                execution_time=result.execution_time,
-                node_info=self.node.node_info,
-                group=group,
-            ),
-            level=level,
-        )
-        if exception:
-            fire_event(RunningOperationCaughtError(exc=str(exception)))
-
-    def print_batch_start_line(
-        self, batch_start: Optional[datetime], batch_idx: int, batch_total: int
-    ) -> None:
-        if batch_start is None:
-            return
-
-        batch_description = self.describe_batch(batch_start)
-        fire_event(
-            LogStartLine(
-                description=batch_description,
-                index=batch_idx,
-                total=batch_total,
-                node_info=self.node.node_info,
-            )
         )
 
     def before_execute(self) -> None:
@@ -361,35 +300,6 @@ class ModelRunner(CompileRunner):
             batch_results=new_batch_results,
         )
 
-    def _build_succesful_run_batch_result(
-        self,
-        model: ModelNode,
-        context: Dict[str, Any],
-        batch: BatchType,
-        elapsed_time: float = 0.0,
-    ) -> RunResult:
-        run_result = self._build_run_model_result(model, context, elapsed_time)
-        run_result.batch_results = BatchResults(successful=[batch])
-        return run_result
-
-    def _build_failed_run_batch_result(
-        self,
-        model: ModelNode,
-        batch: BatchType,
-        elapsed_time: float = 0.0,
-    ) -> RunResult:
-        return RunResult(
-            node=model,
-            status=RunStatus.Error,
-            timing=[],
-            thread_id=threading.current_thread().name,
-            execution_time=elapsed_time,
-            message="ERROR",
-            adapter_response={},
-            failures=1,
-            batch_results=BatchResults(failed=[batch]),
-        )
-
     def _materialization_relations(self, result: Any, model) -> List[BaseRelation]:
         if isinstance(result, str):
             msg = (
@@ -412,6 +322,7 @@ class ModelRunner(CompileRunner):
         hook_ctx: Any,
         context_config: Any,
         model: ModelNode,
+        manifest: Manifest,
         context: Dict[str, Any],
         materialization_macro: MacroProtocol,
     ) -> RunResult:
@@ -426,28 +337,6 @@ class ModelRunner(CompileRunner):
             self.adapter.cache_added(relation.incorporate(dbt_created=True))
 
         return self._build_run_model_result(model, context)
-
-    def _execute_microbatch_model(
-        self,
-        hook_ctx: Any,
-        context_config: Any,
-        model: ModelNode,
-        manifest: Manifest,
-        context: Dict[str, Any],
-        materialization_macro: MacroProtocol,
-    ) -> RunResult:
-        batch_results = None
-        try:
-            batch_results = self._execute_microbatch_materialization(
-                model, manifest, context, materialization_macro
-            )
-        finally:
-            self.adapter.post_model_hook(context_config, hook_ctx)
-
-        if batch_results is not None:
-            return self._build_run_microbatch_model_result(model, batch_results)
-        else:
-            return self._build_run_model_result(model, context)
 
     def execute(self, model, manifest):
         context = generate_runtime_model_context(model, self.config, manifest)
@@ -478,18 +367,127 @@ class ModelRunner(CompileRunner):
 
         hook_ctx = self.adapter.pre_model_hook(context_config)
 
-        if (
-            os.environ.get("DBT_EXPERIMENTAL_MICROBATCH")
-            and model.config.materialized == "incremental"
-            and model.config.incremental_strategy == "microbatch"
-        ):
-            return self._execute_microbatch_model(
-                hook_ctx, context_config, model, manifest, context, materialization_macro
-            )
+        return self._execute_model(
+            hook_ctx, context_config, model, manifest, context, materialization_macro
+        )
+
+
+class MicrobatchModelRunner(ModelRunner):
+    batch_idx: Optional[int] = None
+    # TODO: enum
+    execution_mode: str = "serial"
+
+    def set_batch_idx(self, batch_idx: int):
+        self.batch_idx = batch_idx
+
+    def set_parallel_execution_mode(self):
+        self.execution_mode = "parallel"
+
+    def describe_node(self) -> str:
+        return f"{self.node.language} microbatch model {self.get_node_representation()}"
+
+    def describe_batch(self, batch_start: Optional[datetime]) -> str:
+        # Only visualize date if batch_start year/month/day
+        formatted_batch_start = MicrobatchBuilder.format_batch_start(
+            batch_start, self.node.config.batch_size
+        )
+        import threading
+
+        return f"batch {formatted_batch_start} of {self.get_node_representation()} on {threading.current_thread().name}"
+
+    def print_batch_result_line(
+        self,
+        result: RunResult,
+    ):
+        if self.batch_idx is None:
+            return
+
+        batch_start = self.node.batches[self.batch_idx][0]
+        description = self.describe_batch(batch_start)
+        group = group_lookup.get(self.node.unique_id)
+        if result.status == NodeStatus.Error:
+            status = result.status
+            level = EventLevel.ERROR
         else:
-            return self._execute_model(
-                hook_ctx, context_config, model, context, materialization_macro
+            status = result.message
+            level = EventLevel.INFO
+        fire_event(
+            LogModelResult(
+                description=description,
+                status=status,
+                index=self.batch_idx + 1,
+                total=len(self.node.batches),
+                execution_time=result.execution_time,
+                node_info=self.node.node_info,
+                group=group,
+            ),
+            level=level,
+        )
+        # TODO: This may no longer be necessary
+        # if exception:
+        #     fire_event(RunningOperationCaughtError(exc=str(exception)))
+
+    def print_batch_start_line(self) -> None:
+        if self.batch_idx is None:
+            return
+
+        batch_start = self.node.batches[self.batch_idx][0]
+        if batch_start is None:
+            return
+
+        batch_description = self.describe_batch(batch_start)
+        fire_event(
+            LogStartLine(
+                description=batch_description,
+                index=self.batch_idx + 1,
+                total=len(self.node.batches),
+                node_info=self.node.node_info,
             )
+        )
+
+    def before_execute(self) -> None:
+        # TODO skip when on last batch
+        if self.batch_idx is None:
+            self.print_start_line()
+        else:
+            self.print_batch_start_line()
+
+    def after_execute(self, result) -> None:
+        # TODO: track only after all batches complete
+        # if self.batch_idx == -1:
+        #     track_model_run(self.node_index, self.num_nodes, result, adapter=self.adapter)
+        #     self.print_result_line(result)
+        if self.batch_idx is not None:
+            self.print_batch_result_line(result)
+
+    def _build_succesful_run_batch_result(
+        self,
+        model: ModelNode,
+        context: Dict[str, Any],
+        batch: BatchType,
+        elapsed_time: float = 0.0,
+    ) -> RunResult:
+        run_result = self._build_run_model_result(model, context, elapsed_time)
+        run_result.batch_results = BatchResults(successful=[batch])
+        return run_result
+
+    def _build_failed_run_batch_result(
+        self,
+        model: ModelNode,
+        batch: BatchType,
+        elapsed_time: float = 0.0,
+    ) -> RunResult:
+        return RunResult(
+            node=model,
+            status=RunStatus.Error,
+            timing=[],
+            thread_id=threading.current_thread().name,
+            execution_time=elapsed_time,
+            message="ERROR",
+            adapter_response={},
+            failures=1,
+            batch_results=BatchResults(failed=[batch]),
+        )
 
     def _execute_microbatch_materialization(
         self,
@@ -506,28 +504,27 @@ class ModelRunner(CompileRunner):
             event_time_end=getattr(self.config.args, "EVENT_TIME_END", None),
             default_end_time=self.config.invoked_at,
         )
-        # Indicates whether current batch should be run incrementally
-        incremental_batch = False
 
-        # Note currently (9/30/2024) model.batch_info is only ever _not_ `None`
-        # IFF `dbt retry` is being run and the microbatch model had batches which
-        # failed on the run of the model (which is being retried)
-        if model.batch_info is None:
-            end = microbatch_builder.build_end_time()
-            start = microbatch_builder.build_start_time(end)
-            batches = microbatch_builder.build_batches(start, end)
+        if self.batch_idx is None:
+            # Note currently (9/30/2024) model.batch_info is only ever _not_ `None`
+            # IFF `dbt retry` is being run and the microbatch model had batches which
+            # failed on the run of the model (which is being retried)
+            if model.batch_info is None:
+                end = microbatch_builder.build_end_time()
+                start = microbatch_builder.build_start_time(end)
+                batches = microbatch_builder.build_batches(start, end)
+            else:
+                batches = model.batch_info.failed
+                # If there is batch info, then don't run as full_refresh and do force is_incremental
+                # not doing this risks blowing away the work that has already been done
+                if self._has_relation(model=model):
+                    model.microbatch_execution_is_incremental = True
+
+            model.batches = {batch_idx: batches[batch_idx] for batch_idx in range(len(batches))}
+
         else:
-            batches = model.batch_info.failed
-            # If there is batch info, then don't run as full_refresh and do force is_incremental
-            # not doing this risks blowing away the work that has already been done
-            if self._has_relation(model=model):
-                incremental_batch = True
-
-        # iterate over each batch, calling materialization_macro to get a batch-level run result
-        for batch_idx, batch in enumerate(batches):
-            self.print_batch_start_line(batch[0], batch_idx + 1, len(batches))
-
-            exception = None
+            batch = model.batches[self.batch_idx]
+            # call materialization_macro to get a batch-level run result
             start_time = time.perf_counter()
             try:
                 # Set start/end in context prior to re-compiling
@@ -545,7 +542,7 @@ class ModelRunner(CompileRunner):
                 )
                 # Update jinja context with batch context members
                 batch_context = microbatch_builder.build_batch_context(
-                    incremental_batch=incremental_batch
+                    incremental_batch=model.microbatch_execution_is_incremental
                 )
                 context.update(batch_context)
 
@@ -560,18 +557,20 @@ class ModelRunner(CompileRunner):
                 batch_run_result = self._build_succesful_run_batch_result(
                     model, context, batch, time.perf_counter() - start_time
                 )
+                batch_results.append(batch_run_result)
+
                 # At least one batch has been inserted successfully!
-                incremental_batch = True
+                # Can proceed incrementally + in parallel
+                model.microbatch_execution_is_incremental = True
+                self.set_parallel_execution_mode()
 
             except Exception as e:
                 exception = e
+                fire_event(RunningOperationCaughtError(exc=str(exception)))
                 batch_run_result = self._build_failed_run_batch_result(
                     model, batch, time.perf_counter() - start_time
                 )
 
-            self.print_batch_result_line(
-                batch_run_result, batch[0], batch_idx + 1, len(batches), exception
-            )
             batch_results.append(batch_run_result)
 
         return batch_results
@@ -602,6 +601,41 @@ class ModelRunner(CompileRunner):
         else:
             return False
 
+    def _execute_microbatch_model(
+        self,
+        hook_ctx: Any,
+        context_config: Any,
+        model: ModelNode,
+        manifest: Manifest,
+        context: Dict[str, Any],
+        materialization_macro: MacroProtocol,
+    ) -> RunResult:
+        batch_results = None
+        try:
+            batch_results = self._execute_microbatch_materialization(
+                model, manifest, context, materialization_macro
+            )
+        finally:
+            self.adapter.post_model_hook(context_config, hook_ctx)
+
+        if batch_results is not None:
+            return self._build_run_microbatch_model_result(model, batch_results)
+        else:
+            return self._build_run_model_result(model, context)
+
+    def _execute_model(
+        self,
+        hook_ctx: Any,
+        context_config: Any,
+        model: ModelNode,
+        manifest: Manifest,
+        context: Dict[str, Any],
+        materialization_macro: MacroProtocol,
+    ) -> RunResult:
+        return self._execute_microbatch_model(
+            hook_ctx, context_config, model, manifest, context, materialization_macro
+        )
+
 
 class RunTask(CompileTask):
     def __init__(
@@ -626,6 +660,46 @@ class RunTask(CompileTask):
         hook_index = hook.index or num_hooks
         hook_obj = get_hook(statement, index=hook_index)
         return hook_obj.sql or ""
+
+    def handle_job_queue(self, pool, callback):
+        node = self.job_queue.get()
+        self._raise_set_error()
+        runner = self.get_runner(node)
+        # we finally know what we're running! Make sure we haven't decided
+        # to skip it due to upstream failures
+        if runner.node.unique_id in self._skipped_children:
+            cause = self._skipped_children.pop(runner.node.unique_id)
+            runner.do_skip(cause=cause)
+
+        if isinstance(runner, MicrobatchModelRunner):
+            # Initial runs
+            result = self.call_runner(runner)
+
+            def batch_callback(batch_result):
+                nonlocal result
+                nonlocal runner
+                result.batch_results += batch_result.batch_results
+                # TODO: this length is currently wrong + finishing early
+                if len(runner.node.batches) == len(result.batch_results):
+                    runner.print_result_line(result)
+                    self._handle_result(result)
+                    callback(result)
+
+            batch_idx = 0
+            # execute batches serially until it is safe to fire in parallel
+            while runner.execution_mode == "serial" and batch_idx < len(runner.node.batches):
+                runner.set_batch_idx(batch_idx)
+                batch_callback(self.call_runner(runner))
+                batch_idx += 1
+
+            while batch_idx < len(runner.node.batches):
+                batch_runner = self.get_runner(deepcopy(node))
+                batch_runner.set_batch_idx(batch_idx)
+                self._submit(pool, [batch_runner], batch_callback)
+                batch_idx += 1
+        else:
+            args = [runner]
+            self._submit(pool, args, callback)
 
     def _hook_keyfunc(self, hook: HookNode) -> Tuple[str, Optional[int]]:
         package_name = hook.package_name
@@ -805,8 +879,15 @@ class RunTask(CompileTask):
             resource_types=[NodeType.Model],
         )
 
-    def get_runner_type(self, _) -> Optional[Type[BaseRunner]]:
-        return ModelRunner
+    def get_runner_type(self, node) -> Optional[Type[BaseRunner]]:
+        if (
+            os.environ.get("DBT_EXPERIMENTAL_MICROBATCH")
+            and node.config.materialized == "incremental"
+            and node.config.incremental_strategy == "microbatch"
+        ):
+            return MicrobatchModelRunner
+        else:
+            return ModelRunner
 
     def task_end_messages(self, results) -> None:
         if results:

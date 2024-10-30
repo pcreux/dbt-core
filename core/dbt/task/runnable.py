@@ -232,6 +232,7 @@ class GraphRunnableTask(ConfiguredTask):
             try:
                 result = runner.run_with_hooks(self.manifest)
             except Exception as e:
+                result = None
                 thread_exception = e
             finally:
                 if result is not None:
