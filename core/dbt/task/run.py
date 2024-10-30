@@ -656,31 +656,31 @@ class RunTask(CompileTask):
         with collect_timing_info("compile", timing.append):
             sql = self.get_hook_sql(adapter, hook, hook.index, num_hooks, extra_context)
 
-            started_at = timing[0].started_at or datetime.utcnow()
-            hook.update_event_status(
-                started_at=started_at.isoformat(), node_status=RunningStatus.Started
+        started_at = timing[0].started_at or datetime.utcnow()
+        hook.update_event_status(
+            started_at=started_at.isoformat(), node_status=RunningStatus.Started
+        )
+
+        fire_event(
+            LogHookStartLine(
+                statement=hook_name,
+                index=hook.index,
+                total=num_hooks,
+                node_info=hook.node_info,
             )
+        )
 
-            fire_event(
-                LogHookStartLine(
-                    statement=hook_name,
-                    index=hook.index,
-                    total=num_hooks,
-                    node_info=hook.node_info,
-                )
-            )
+        with collect_timing_info("execute", timing.append):
+            status, message = get_execution_status(sql, adapter)
 
-            with collect_timing_info("execute", timing.append):
-                status, message = get_execution_status(sql, adapter)
+        finished_at = timing[1].completed_at or datetime.utcnow()
+        hook.update_event_status(finished_at=finished_at.isoformat())
+        execution_time = (finished_at - started_at).total_seconds()
 
-            finished_at = timing[1].completed_at or datetime.utcnow()
-            hook.update_event_status(finished_at=finished_at.isoformat())
-            execution_time = (finished_at - started_at).total_seconds()
-
-            if status == RunStatus.Success:
-                message = f"{hook_name} passed"
-            else:
-                message = f"{hook_name} failed, error:\n {message}"
+        if status == RunStatus.Success:
+            message = f"{hook_name} passed"
+        else:
+            message = f"{hook_name} failed, error:\n {message}"
 
         return (status, message, execution_time)
 
