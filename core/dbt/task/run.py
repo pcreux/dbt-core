@@ -645,7 +645,10 @@ class RunTask(CompileTask):
         return hooks
 
     def safe_run_hooks(
-        self, adapter: BaseAdapter, hook_type: RunHookType, extra_context: Dict[str, Any]
+        self,
+        adapter: BaseAdapter,
+        hook_type: RunHookType,
+        extra_context: Dict[str, Any],
     ) -> RunStatus:
         ordered_hooks = self.get_hooks_by_type(hook_type)
 
