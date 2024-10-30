@@ -644,6 +644,46 @@ class RunTask(CompileTask):
         hooks.sort(key=self._hook_keyfunc)
         return hooks
 
+    def _safe_run_hook(
+        self,
+        adapter: BaseAdapter,
+        hook: HookNode,
+        hook_name: str,
+        timing: List[TimingInfo],
+        num_hooks: int,
+        extra_context: Dict[str, Any],
+    ) -> Tuple[RunStatus, str, float]:
+        with collect_timing_info("compile", timing.append):
+            sql = self.get_hook_sql(adapter, hook, hook.index, num_hooks, extra_context)
+
+            started_at = timing[0].started_at or datetime.utcnow()
+            hook.update_event_status(
+                started_at=started_at.isoformat(), node_status=RunningStatus.Started
+            )
+
+            fire_event(
+                LogHookStartLine(
+                    statement=hook_name,
+                    index=hook.index,
+                    total=num_hooks,
+                    node_info=hook.node_info,
+                )
+            )
+
+            with collect_timing_info("execute", timing.append):
+                status, message = get_execution_status(sql, adapter)
+
+            finished_at = timing[1].completed_at or datetime.utcnow()
+            hook.update_event_status(finished_at=finished_at.isoformat())
+            execution_time = (finished_at - started_at).total_seconds()
+
+            if status == RunStatus.Success:
+                message = f"{hook_name} passed"
+            else:
+                message = f"{hook_name} failed, error:\n {message}"
+
+        return (status, message, execution_time)
+
     def safe_run_hooks(
         self,
         adapter: BaseAdapter,
@@ -669,37 +709,12 @@ class RunTask(CompileTask):
                     execution_time = 0.0
                     timing: List[TimingInfo] = []
 
+                    # Only run this hook if the previous hook succeeded
+                    # otherwise, skip it
                     if status == RunStatus.Success:
-                        with collect_timing_info("compile", timing.append):
-                            sql = self.get_hook_sql(
-                                adapter, hook, hook.index, num_hooks, extra_context
-                            )
-
-                        started_at = timing[0].started_at or datetime.utcnow()
-                        hook.update_event_status(
-                            started_at=started_at.isoformat(), node_status=RunningStatus.Started
+                        (status, message, execution_time) = self._safe_run_hook(
+                            adapter, hook, hook_name, timing, num_hooks, extra_context
                         )
-
-                        fire_event(
-                            LogHookStartLine(
-                                statement=hook_name,
-                                index=hook.index,
-                                total=num_hooks,
-                                node_info=hook.node_info,
-                            )
-                        )
-
-                        with collect_timing_info("execute", timing.append):
-                            status, message = get_execution_status(sql, adapter)
-
-                        finished_at = timing[1].completed_at or datetime.utcnow()
-                        hook.update_event_status(finished_at=finished_at.isoformat())
-                        execution_time = (finished_at - started_at).total_seconds()
-
-                        if status == RunStatus.Success:
-                            message = f"{hook_name} passed"
-                        else:
-                            message = f"{hook_name} failed, error:\n {message}"
                     else:
                         status = RunStatus.Skipped
                         message = f"{hook_name} skipped"
