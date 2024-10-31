@@ -254,50 +254,19 @@ class ModelRunner(CompileRunner):
             batch_results=None,
         )
 
-    def _build_run_microbatch_model_result(
-        self, model: ModelNode, batch_run_results: List[RunResult]
-    ) -> RunResult:
-        batch_results = BatchResults()
-        for result in batch_run_results:
-            if result.batch_results is not None:
-                batch_results += result.batch_results
-            else:
-                raise DbtInternalError(
-                    "Got a run result without batch results for a batch run, this should be impossible"
-                )
-
-        num_successes = len(batch_results.successful)
-        num_failures = len(batch_results.failed)
-
-        if num_failures == 0:
-            status = RunStatus.Success
-            msg = "SUCCESS"
-        elif num_successes == 0:
-            status = RunStatus.Error
-            msg = "ERROR"
-        else:
-            status = RunStatus.PartialSuccess
-            msg = f"PARTIAL SUCCESS ({num_successes}/{num_successes + num_failures})"
-
-        if model.batch_info is not None:
-            new_batch_results = deepcopy(model.batch_info)
-            new_batch_results.failed = []
-            new_batch_results = new_batch_results + batch_results
-        else:
-            new_batch_results = batch_results
-
+    def _build_run_microbatch_model_result(self, model: ModelNode) -> RunResult:
         return RunResult(
             node=model,
-            status=status,
+            status=RunStatus.Success,
             timing=[],
             thread_id=threading.current_thread().name,
             # The execution_time here doesn't get propagated to logs because
             # `safe_run_hooks` handles the elapsed time at the node level
             execution_time=0,
-            message=msg,
+            message="",
             adapter_response={},
-            failures=num_failures,
-            batch_results=new_batch_results,
+            failures=0,
+            batch_results=BatchResults(),
         )
 
     def _materialization_relations(self, result: Any, model) -> List[BaseRelation]:
@@ -423,9 +392,6 @@ class MicrobatchModelRunner(ModelRunner):
             ),
             level=level,
         )
-        # TODO: This may no longer be necessary
-        # if exception:
-        #     fire_event(RunningOperationCaughtError(exc=str(exception)))
 
     def print_batch_start_line(self) -> None:
         if self.batch_idx is None:
@@ -446,17 +412,12 @@ class MicrobatchModelRunner(ModelRunner):
         )
 
     def before_execute(self) -> None:
-        # TODO skip when on last batch
         if self.batch_idx is None:
             self.print_start_line()
         else:
             self.print_batch_start_line()
 
     def after_execute(self, result) -> None:
-        # TODO: track only after all batches complete
-        # if self.batch_idx == -1:
-        #     track_model_run(self.node_index, self.num_nodes, result, adapter=self.adapter)
-        #     self.print_result_line(result)
         if self.batch_idx is not None:
             self.print_batch_result_line(result)
 
@@ -495,8 +456,7 @@ class MicrobatchModelRunner(ModelRunner):
         manifest: Manifest,
         context: Dict[str, Any],
         materialization_macro: MacroProtocol,
-    ) -> List[RunResult]:
-        batch_results: List[RunResult] = []
+    ) -> RunResult:
         microbatch_builder = MicrobatchBuilder(
             model=model,
             is_incremental=self._is_incremental(model),
@@ -520,6 +480,7 @@ class MicrobatchModelRunner(ModelRunner):
                 if self._has_relation(model=model):
                     model.microbatch_execution_is_incremental = True
 
+            batch_result = self._build_run_microbatch_model_result(model)
             model.batches = {batch_idx: batches[batch_idx] for batch_idx in range(len(batches))}
 
         else:
@@ -557,7 +518,7 @@ class MicrobatchModelRunner(ModelRunner):
                 batch_run_result = self._build_succesful_run_batch_result(
                     model, context, batch, time.perf_counter() - start_time
                 )
-                batch_results.append(batch_run_result)
+                batch_result = batch_run_result
 
                 # At least one batch has been inserted successfully!
                 # Can proceed incrementally + in parallel
@@ -571,9 +532,9 @@ class MicrobatchModelRunner(ModelRunner):
                     model, batch, time.perf_counter() - start_time
                 )
 
-            batch_results.append(batch_run_result)
+            batch_result = batch_run_result
 
-        return batch_results
+        return batch_result
 
     def _has_relation(self, model) -> bool:
         relation_info = self.adapter.Relation.create_from(self.config, model)
@@ -610,18 +571,14 @@ class MicrobatchModelRunner(ModelRunner):
         context: Dict[str, Any],
         materialization_macro: MacroProtocol,
     ) -> RunResult:
-        batch_results = None
         try:
-            batch_results = self._execute_microbatch_materialization(
+            batch_result = self._execute_microbatch_materialization(
                 model, manifest, context, materialization_macro
             )
         finally:
             self.adapter.post_model_hook(context_config, hook_ctx)
 
-        if batch_results is not None:
-            return self._build_run_microbatch_model_result(model, batch_results)
-        else:
-            return self._build_run_model_result(model, context)
+        return batch_result
 
     def _execute_model(
         self,
@@ -672,21 +629,39 @@ class RunTask(CompileTask):
             runner.do_skip(cause=cause)
 
         if isinstance(runner, MicrobatchModelRunner):
-            # Initial runs
+            # Initial run computes batch metadata
             result = self.call_runner(runner)
 
             def batch_callback(batch_result):
                 nonlocal result
                 nonlocal runner
                 result.batch_results += batch_result.batch_results
-                # TODO: this length is currently wrong + finishing early
+                result.execution_time += batch_result.execution_time
+
+                # All batches are complete!
                 if len(runner.node.batches) == len(result.batch_results):
+                    num_successes = len(result.batch_results.successful)
+                    num_failures = len(result.batch_results.failed)
+                    if num_failures == 0:
+                        status = RunStatus.Success
+                        msg = "SUCCESS"
+                    elif num_successes == 0:
+                        status = RunStatus.Error
+                        msg = "ERROR"
+                    else:
+                        status = RunStatus.PartialSuccess
+                        msg = f"PARTIAL SUCCESS ({num_successes}/{num_successes + num_failures})"
+                    result.status = status
+                    result.message = msg
+
                     runner.print_result_line(result)
+                    # TODO: track model run
                     self._handle_result(result)
                     callback(result)
 
             batch_idx = 0
             # execute batches serially until it is safe to fire in parallel
+            # TODO: ensure this loop does not cause hanging
             while runner.execution_mode == "serial" and batch_idx < len(runner.node.batches):
                 runner.set_batch_idx(batch_idx)
                 batch_callback(self.call_runner(runner))
